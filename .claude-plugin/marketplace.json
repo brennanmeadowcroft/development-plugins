@@ -26,6 +26,11 @@
       "name": "orientation-tools",
       "source": "./orientation-tools",
       "description": "Codebase orientation skills for mapping structure, interactive exploration, task-driven learning, and health analysis before large changes"
+    },
+    {
+      "name": "product-discovery",
+      "source": "./product-discovery",
+      "description": "Structured product discovery and feature enhancement workflows that produce complete PRDs — including UX design specs and technical solutions — ready for development planning."
     }
   ]
 }
