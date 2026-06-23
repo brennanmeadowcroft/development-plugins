@@ -1,18 +1,19 @@
 ---
 name: build-feature-from-plan
 description: >
-  Orchestrates building a feature from a PLAN.md. Delegates backend work to the
-  backend agent and frontend work to the frontend agent. Runs lint after each agent,
-  spawns test-writing agents with test_gaps.md context, pauses for user validation,
-  then runs a security scan. Trigger when the user says "build the feature",
-  "implement the plan", "start building", or invokes /build-feature-from-plan
-  with a plan folder path.
+  Orchestrates building a feature from a PLAN.md and its phase folders. For each
+  phase: spawns the backend agent (which writes tests inline), runs the code-evaluate
+  loop, then spawns the frontend agent (which writes tests inline), runs the
+  code-evaluate loop, then pauses for user validation of Tier 3 + Tier 4 items.
+  After all phases, runs a security scan. Trigger when the user says "build the
+  feature", "implement the plan", "start building", or invokes
+  /build-feature-from-plan with a plan folder path.
 argument-hint: "<plan-folder> [phase-number|all]"
 ---
 
 # Build Feature From Plan
 
-You are the orchestrator for building a feature from a PLAN.md. You delegate implementation to specialized subagents, enforce quality gates, and coordinate user validation before shipping.
+You are the orchestrator for building a feature from a PLAN.md and its phase folders. You delegate implementation to specialized agents, run evaluation loops after each component, and coordinate user validation before closing out.
 
 ## Configuration
 
@@ -22,31 +23,33 @@ At startup, read configuration from the project's `CLAUDE.md`:
 2. Read the following keys (use defaults if not present):
    - `plans-dir` → base folder for plans (default: `plans/`)
    - `docs-dir` → base folder for documentation (default: `docs/`)
-   - `backend-agent` → agent to use for backend implementation (default: `development-workflow:python-api-developer`)
-   - `frontend-agent` → agent to use for frontend implementation (default: `development-workflow:vue-developer`)
+   - `backend-agent` → agent for backend implementation (default: `development-tools:python-api-developer`)
+   - `frontend-agent` → agent for frontend implementation (default: `development-tools:vue-developer`)
 
-If `backend-agent` or `frontend-agent` is not specified, use the defaults. If the specified agent is not available, fall back to `general-purpose`.
+If a specified agent is not available, fall back to `general-purpose`.
 
 ## Arguments
 
-- `<plan-folder>` (required) — the folder containing `PLAN.md` (e.g., `plans/010-share-with-friends`)
-- `[phase-number|all]` (optional) — phase to build (e.g., `1`), or `all` to build all phases. Default: `all`
+- `<plan-folder>` (required) — the folder containing `PLAN.md` and phase subfolders (e.g., `plans/010-share-with-friends`)
+- `[phase-number|all]` (optional) — the phase to build (e.g., `1`), or `all` to build all phases sequentially. Default: `all`
 
 ---
 
 ## Phase 0 — Setup
 
-1. Read `{plan-folder}/PLAN.md` in full. Note:
-   - The plan name (used in commit messages, e.g., `010-share-with-friends`)
-   - The backend steps and frontend steps for the target phase(s)
-   - The Critical Scope Flags section — these are the highest-risk items
-   - The Verification section — this becomes your final checklist
+1. Read `{plan-folder}/PLAN.md` and note:
+   - The plan name (e.g., `010-share-with-friends`) — used in commit messages
+   - The implementation phases and their folders
+   - The Critical Scope Flags — treat these as non-negotiable throughout
 
-2. Check whether `{plan-folder}/TEST_PLAN.md` exists. If it does, read it and note:
-   - The test files it references and their P0/P1 priorities
-   - The Risk Areas section
+2. Identify the target phase folder(s):
+   - If `phase-number` is specified: `{plan-folder}/phase-{N}/`
+   - If `all`: all `phase-{N}/` subdirectories in dependency order
 
-3. Note the path `{plan-folder}/test_gaps.md` — you will pass it to the test-writing agents later. It may not exist yet; that is fine.
+3. For each target phase, verify these files exist:
+   - `PHASE_PLAN.md` — required
+   - `ACCEPTANCE_CRITERIA.md` — required; if missing, tell the user to run `/plan-evaluate {plan-folder}` first
+   - `TEST_PLAN_PHASE.md` — include if present
 
 4. Run the test baseline before touching any code (use project commands from `CLAUDE.md`):
    - Backend test suite
@@ -59,153 +62,163 @@ If `backend-agent` or `frontend-agent` is not specified, use the defaults. If th
    git checkout main && git pull && git checkout -b feature/{plan-name}
    ```
 
-6. Write a task list to `{plan-folder}/phase-status.md` broken into:
-   - Backend tasks (from the Backend section of PLAN.md)
-   - Frontend tasks (from the Frontend section of PLAN.md)
-   - Test tasks (from TEST_PLAN.md P0/P1 items, if it exists)
-   - QA validation (pending user sign-off)
+6. Record the pre-implementation HEAD SHA for use as the diff base in evaluation:
+   ```bash
+   git rev-parse HEAD
+   ```
+   Write it to `{phase-folder}/phase-status.md` under a "Implementation base SHA" note.
 
 ---
 
-## Phase 1 — Backend Implementation
+## Phase 1 — Backend Implementation + Evaluation
 
-Spawn the backend agent (`{backend-agent}`) to implement all backend steps for the target phase(s).
+Repeat for each target phase in order.
+
+### Step A — Spawn backend agent
+
+Spawn `{backend-agent}` to implement the backend component.
 
 Brief the agent with:
-- The full content of `{plan-folder}/PLAN.md`
-- Instruction to implement **only the Backend section** steps, in the order listed
-- The Critical Scope Flags from the plan — instruct the agent to treat these as non-negotiable
-- Instruction **not** to write tests (tests come in a later phase)
-- Instruction to commit when done using the format: `[{plan-name}] Backend implementation`
-- The content of `{plan-folder}/memory.md` if it exists (prior implementation notes)
-- The `plans-dir` config value for writing test_gaps.md if needed
+- Full content of `{phase-folder}/PHASE_PLAN.md`
+- Full content of `{phase-folder}/TEST_PLAN_PHASE.md` (if present)
+- Full content of `{phase-folder}/ACCEPTANCE_CRITERIA.md`
+- Instruction: implement **only the Backend section** steps, in the order listed
+- Instruction: **write tests alongside the implementation** (TDD) — the test scenarios in TEST_PLAN_PHASE.md define what to cover; write them as you implement each step
+- Instruction: tests must satisfy the Tier 1 commands listed in ACCEPTANCE_CRITERIA.md
+- The Critical Scope Flags for this phase — treat these as non-negotiable
+- Instruction to commit when done: `[{plan-name}] Phase {N} backend implementation`
+- The content of `{phase-folder}/memory.md` if it contains prior implementation notes
 
 Wait for the backend agent to complete.
 
-After the backend agent finishes:
+### Step B — Run code evaluation loop
 
-1. Run the backend lint command (from `CLAUDE.md`). If lint fails, spawn the backend agent again with the full lint output and instruct it to fix all violations. Repeat until lint is clean.
+Run the evaluation inline (up to 3 rounds):
 
-2. Run the backend test suite. If tests that were passing before this phase now fail, spawn the backend agent to fix the regressions, providing the full test output. Repeat until green.
+**Round setup**: read `{phase-folder}/ACCEPTANCE_CRITERIA.md` Tier 1 commands. Run each command and capture exit code + output.
 
-3. Update `{plan-folder}/phase-status.md` to mark backend tasks complete.
+**Spawn code-evaluator** (`development-tools:code-evaluator` or `general-purpose`):
+- PHASE_PLAN.md content
+- ACCEPTANCE_CRITERIA.md content
+- Tier 1 results
+- Base SHA (from Phase 0 Step 6), HEAD SHA
+- Diff: `git diff {base-sha}..HEAD`
+- Round number
+- Review history: `{phase-folder}/review-history.md`
+- Component: `backend`
+
+If verdict is **Needs fixes**:
+- Read Critical findings from `{phase-folder}/review-history.md`
+- Spawn `{backend-agent}` with the findings and instruction to fix only what is listed
+- Agent commits: `[{plan-name}] Phase {N} backend evaluation fixes (round {N})`
+- Re-run evaluation (max 3 rounds total)
+
+If max rounds exceeded with open Critical findings: surface to user (see escalation note at end of skill).
+
+Mark backend evaluation checkboxes complete in `{phase-folder}/phase-status.md`.
 
 ---
 
-## Phase 2 — Frontend Implementation
+## Phase 2 — Frontend Implementation + Evaluation
 
-Spawn the frontend agent (`{frontend-agent}`) to implement all frontend steps for the target phase(s).
+### Step A — Spawn frontend agent
+
+Spawn `{frontend-agent}` to implement the frontend component.
 
 Brief the agent with:
-- The full content of `{plan-folder}/PLAN.md`
-- Instruction to implement **only the Frontend section** steps, in the order listed
-- Any screenshots referenced in the plan (provide the screenshots directory path if noted in the plan)
-- Instruction **not** to write tests (tests come in a later phase)
-- Instruction to commit when done using the format: `[{plan-name}] Frontend implementation`
-- The content of `{plan-folder}/memory.md` if it exists
-- The `plans-dir` config value for writing test_gaps.md if needed
+- Full content of `{phase-folder}/PHASE_PLAN.md`
+- Full content of `{phase-folder}/TEST_PLAN_PHASE.md` (if present)
+- Full content of `{phase-folder}/ACCEPTANCE_CRITERIA.md`
+- Instruction: implement **only the Frontend section** steps, in the order listed
+- Instruction: **write tests alongside the implementation** (TDD) — the test scenarios in TEST_PLAN_PHASE.md define what to cover; write them as you implement each component
+- Instruction: tests must satisfy the Tier 1 commands listed in ACCEPTANCE_CRITERIA.md
+- The Critical Scope Flags for this phase
+- Instruction to commit when done: `[{plan-name}] Phase {N} frontend implementation`
+- The content of `{phase-folder}/memory.md` if it contains prior implementation notes
 
 Wait for the frontend agent to complete.
 
-After the frontend agent finishes:
+### Step B — Run code evaluation loop
 
-1. Run the frontend lint commands (from `CLAUDE.md`). If lint fails, spawn the frontend agent again with the full lint output and instruct it to fix all violations. Repeat until lint is clean.
+Same structure as Phase 1 Step B, with component: `frontend` and agent: `{frontend-agent}`.
 
-2. Run the frontend test suite. If tests that were passing before this phase now fail, spawn the frontend agent to fix the regressions. Repeat until green.
-
-3. Update `{plan-folder}/phase-status.md` to mark frontend tasks complete.
+Mark frontend evaluation checkboxes complete in `{phase-folder}/phase-status.md`.
 
 ---
 
-## Phase 3 — Test Implementation
-
-Spawn two agents **in parallel in a single message**:
-
-### Agent A: Backend Tests
-
-Spawn the backend agent (`{backend-agent}`) to write backend tests.
-
-Brief the agent with:
-- The Tier 2 (Integration Tests) and Tier 3 (Contract Tests) sections of `{plan-folder}/TEST_PLAN.md`
-- The Risk Areas section from the test plan
-- Instruction: "Implement only **P0 and P1** tests. Skip P2 and P3 entirely."
-- Context about test_gaps.md: "Read `{plan-folder}/test_gaps.md` if it exists — it contains implementation details discovered during development that may alter the test plan."
-- Instruction to commit when done: `[{plan-name}] Backend tests`
-
-### Agent B: Frontend Tests
-
-Spawn the frontend agent (`{frontend-agent}`) to write frontend tests.
-
-Brief the agent with:
-- The Tier 1 (Unit Tests) section of `{plan-folder}/TEST_PLAN.md`
-- Instruction: "Implement only **P0 and P1** tests. Skip P2 and P3 entirely."
-- Context about test_gaps.md: "Read `{plan-folder}/test_gaps.md` if it exists."
-- Instruction to commit when done: `[{plan-name}] Frontend tests`
-
-Wait for both agents to complete.
-
-After both test agents finish:
-
-1. Run lint for both backend and frontend. Fix any violations by spawning the relevant agent with the lint output.
-
-2. Run both test suites. If any tests fail:
-   - Backend failures → spawn the backend agent with the full test output to fix them
-   - Frontend failures → spawn the frontend agent with the full test output to fix them
-   Repeat until both suites are green.
-
-3. Update `{plan-folder}/phase-status.md` to mark test tasks complete.
-
----
-
-## Phase 4 — User Validation Gate
+## Phase 3 — User Validation Gate
 
 **Stop here and present to the user:**
 
-1. What was built — a one-paragraph summary of the backend, frontend, and test work completed
-2. How to validate it — reproduce the Verification steps from `PLAN.md` verbatim
-3. Current test suite status (pass/fail counts from the last run)
-4. Any items skipped or deferred
+1. What was built — a one-paragraph summary of the backend and frontend work completed for this phase
+2. **Tier 3 checklist** (verbatim from `{phase-folder}/ACCEPTANCE_CRITERIA.md` Tier 3) — what to verify manually in the browser or app. Present each item as a numbered step.
+3. **Tier 4 checklist** (verbatim from `{phase-folder}/ACCEPTANCE_CRITERIA.md` Tier 4) — product acceptance questions for the user to answer
+4. Test suite status (pass/fail counts from the last evaluation round)
+5. Any Important findings noted but not blocking (for awareness)
 
-**Ask the user to validate and report back. Do not proceed until the user explicitly confirms.**
+**Ask the user to:**
+- Work through the Tier 3 checklist and report any visual/UX issues
+- Answer the Tier 4 product acceptance questions
+- Explicitly confirm when ready to proceed
+
+**Do not proceed until the user explicitly confirms.**
 
 If the user reports issues or requests changes:
+1. Determine whether the change is backend, frontend, or both
+2. Spawn the relevant agent with a precise description of what to change and why
+3. Run the relevant Tier 1 commands and re-run the code-evaluate loop
+4. Present the Tier 3 checklist again and ask the user to re-validate
+5. Repeat until the user explicitly confirms
 
-1. Determine whether each change is backend, frontend, or both.
-2. Spawn the relevant agent with a precise description of what needs to change and why.
-3. After completion, run lint and the relevant test suite; fix any failures.
-4. If tests need updating as a result of changes, spawn the appropriate test agent (P0/P1 only).
-5. Ask the user to validate again. Repeat until the user explicitly confirms.
+Once confirmed, mark Tier 3 and Tier 4 checkboxes complete in `{phase-folder}/phase-status.md`.
 
 ---
 
-## Phase 5 — Security Scan
+## Repeat Phases 1–3 for each subsequent phase
 
-Once the user confirms the feature is working, invoke the `/scan` skill (or the project's security scan command) to run a static analysis scan on the changed files.
+After the user validates Phase 1, proceed to Phase 1–3 for Phase 2 (if it exists), and so on.
+
+Each phase is fully validated before the next phase begins.
+
+---
+
+## Phase 4 — Security Scan
+
+Once all phases are confirmed by the user, invoke the `/scan` skill (or the project's security scan command) on the changed files.
 
 If the scan reports issues:
 - **Critical or high severity**: spawn the relevant agent to fix. Re-run the scan after fixes.
 - **Medium severity**: present to the user with a recommendation and let them decide.
-- **Low / informational**: report to the user; do not block on these.
+- **Low / informational**: report to the user; do not block.
 
 ---
 
-## Phase 6 — Close Out
+## Phase 5 — Close Out
 
-1. Run the full verification checklist from `PLAN.md` one final time.
+1. Run the full verification checklist from `PLAN.md` one final time. If any step fails, fix it before closing out.
 
-   If any step fails, fix it before closing out.
-
-2. Update `{plan-folder}/memory.md` with:
+2. For each phase folder, update `{phase-folder}/memory.md` with:
    - Non-obvious implementation decisions made during this build
-   - Any deviations from the plan and why
+   - Deviations from the plan and why
    - Challenges encountered and how they were resolved
    - Anything a future engineer would need to know that is not obvious from the code
 
-   Do **not** document routine changes — focus on the surprising, non-obvious, and risk-mitigating decisions.
+   Do not document routine changes — focus on the surprising, non-obvious, and risk-mitigating.
 
-3. Update `{plan-folder}/phase-status.md` to mark all tasks complete.
+3. Mark all remaining tasks complete in each `{phase-folder}/phase-status.md`.
 
-4. Report back to the user:
-   - What was built and committed
+4. Report to the user:
+   - What was built and committed (by phase)
    - Any deferred items or known limitations
    - The branch name and suggested PR title: `[{plan-name}] {feature description}`
+
+---
+
+## Escalation note
+
+If the code evaluation loop reaches 3 rounds with Critical findings still open for any component, stop and present the situation to the user:
+- The unresolved findings verbatim
+- What the fix agent attempted
+- Options: fix manually, adjust the plan, or proceed accepting the risk
+
+Do not skip to the next phase until the current phase's evaluation is resolved or explicitly accepted.

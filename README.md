@@ -1,88 +1,116 @@
-# claude-plugins
+# Development Plugins
 
-A personal coding harness built on top of Claude Code, covering the full arc of the software development lifecycle — from first contact with an unfamiliar codebase through planning, building, and security review before shipping.
+A personal coding harness built on top of Claude Code, covering the full arc of software development — from discovery through planning, building, and review before shipping.
 
-Commercial AI coding tools are general-purpose. This plugin collection layers structured, opinionated workflows on top of them: each plugin addresses a specific phase of the SDLC, and the outputs of earlier phases feed into later ones.
+Each phase produces an artifact that feeds the next. The outputs of discovery become the inputs to planning; the approved plan becomes the brief for each implementing agent.
 
-## Plugins
+---
 
-These plugins cover the software development lifecycle — the build phase of the broader product development lifecycle.
+## Core Workflow
 
-### Orientation
+```
+/product-discovery
+       ↓
+   PRD.md
+       ↓
+/work-breakdown
+       ↓
+   PLAN.md + phase-N/ folders (each with PHASE_PLAN.md + ACCEPTANCE_CRITERIA.md)
+       ↓
+/build-feature-from-plan
+       ↓
+   code + tests, validated by phase
+```
 
-- [orientation-tools](orientation-tools/README.md) — maps an unfamiliar codebase: structure, architecture, patterns, and risk profile before making changes.
+### Discover
 
-### Architecture & Design
+Turn a GitHub issue or idea into a PRD with UX specs and a recommended technical approach.
 
-- [vue-tools](vue-tools/README.md) — Vue.js architecture guidance for component design, state management, and multi-team feature organization.
-- [security-tools](security-tools/README.md) — generates a threat model scoped to this codebase before significant features are built.
+| Skill                                   | When to use                                                                                              |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/product-discovery [issue-number ...]` | Full discovery: interviews you, writes the PRD, consults UX strategist and system architect in parallel. |
+| `/feature-enhancement [issue-number]`   | Lightweight version for enhancements where the need is already well understood.                          |
 
-### Implementation
+---
 
-- [development-tools](development-workflow/README.md) — executes a plan document phase-by-phase on the platform server.
+### Plan
 
-### Review & Verification
+Translate the PRD into a concrete, phase-based implementation plan. The plan goes through an evaluator loop — up to 3 rounds of critique and revision — before any code is written. On approval, each phase gets its own folder with everything an implementing agent needs.
 
-- [security-tools](security-tools/README.md) — reviews completed code against the threat model; scans dependencies for known vulnerabilities.
+| Skill                           | When to use                                                                                                                                                                       |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/work-breakdown <path-to-prd>` | The main entry point. Spawns tech-lead, ui-architect, and qa-architect to produce `PLAN.md` + `TEST_PLAN.md`, runs the plan evaluation loop, and materializes `phase-N/` folders. |
+| `/plan-evaluate <plan-folder>`  | Re-runs the evaluation loop on an existing plan after changes.                                                                                                                    |
+| `/qa-architect <plan-folder>`   | Regenerates `TEST_PLAN.md` without rerunning the full breakdown.                                                                                                                  |
+
+Each phase folder contains a `ACCEPTANCE_CRITERIA.md` that the evaluator derives from the plan — organized into four tiers so the code evaluator handles what's deterministic and you only review what requires human judgment:
+
+| Tier                   | Who checks it                                                      |
+| ---------------------- | ------------------------------------------------------------------ |
+| 1 — Commands           | Code evaluator (tests pass, lint, build, migration)                |
+| 2 — Code structure     | Code evaluator (endpoints exist, components created, auth applied) |
+| 3 — Visual / UX        | You, in the browser                                                |
+| 4 — Product acceptance | You                                                                |
+
+---
+
+### Build
+
+Implement each phase. Backend and frontend agents write their own tests (TDD). A code evaluator reviews each component automatically. You see only what requires human judgment — Tier 3 and Tier 4.
+
+| Skill                                                 | When to use                                                                                                               |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `/build-feature-from-plan <plan-folder> [phase\|all]` | Main entry point. Runs backend, code-evaluate, frontend, code-evaluate, then pauses for your Tier 3 + 4 review per phase. |
+| `/code-evaluate <phase-folder> [backend\|frontend]`   | Re-evaluate a component without rerunning the full build.                                                                 |
+
+---
+
+### Review
+
+After the feature is on a branch.
+
+| Skill                    | When to use                                                             |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `/code-review`           | Reviews the current diff for correctness, reuse, and efficiency issues. |
+| `/scan-dependencies`     | Scans for known dependency vulnerabilities.                             |
+| `/security-threat-model` | Generates a threat model scoped to this codebase and feature.           |
+
+---
+
+## Supplementary Tools
+
+These can be used at any point in the workflow — not tied to a specific phase.
+
+| Skill                    | Plugin                                           | What it does                                                                                                                           |
+| ------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `/codebase-orientation`  | [orientation-tools](orientation-tools/README.md) | Full orientation brief: architecture, key files, patterns, and gotchas. Useful before planning or when joining an unfamiliar codebase. |
+| `/codebase-health`       | [orientation-tools](orientation-tools/README.md) | Risk profile and tech debt assessment before large changes.                                                                            |
+| `/codebase-cartographer` | [orientation-tools](orientation-tools/README.md) | Navigable codebase map scoped to a specific task.                                                                                      |
+| Vue architecture review  | [vue-tools](vue-tools/README.md)                 | Component design, state management guidance, and feature organization for Vue.js projects.                                             |
 
 ---
 
 ## Installation
 
-### 1. Add the marketplace
+### Add the marketplace
 
-**Claude Code**
-```
-/plugin marketplace add brennanmeadowcroft/development-plugins
-```
-
-**Claude Desktop**
-1. Click the "+" on a new chat
-2. "Connectors" > "Manage Connectors"
-3. "Browse Plugins" in the sidebar
-4. Click the "Personal" tab
-5. Click the "+"
-6. Choose add from Github
-7. Add `brennanmeadowcroft/development-plugins` as the repo
-
-**Manual configuration**
-
-You can also add the marketplace directly in `~/.claude/settings.json`:
-```json
-{
-  "extraKnownMarketplaces": {
-    "bmeadowcroft-plugins": {
-      "source": { "source": "github", "repo": "brennanmeadowcroft/development-plugins" }
-    }
-  }
-}
+```bash
+claude plugin marketplace add /path/to/development-plugins
 ```
 
-### 2. Install a plugin
+### Install plugins
 
-**Claude Code**
-```
-/plugin install <plugin-name>@bmeadowcroft-development-plugins
-```
-
-For example:
-```
-/plugin install orientation-tools@bmeadowcroft-development-plugins
+```bash
+claude plugin install development-tools@bmeadowcroft-development-plugins
+claude plugin install product-discovery@bmeadowcroft-development-plugins
+claude plugin install orientation-tools@bmeadowcroft-development-plugins
+claude plugin install security-tools@bmeadowcroft-development-plugins
+claude plugin install vue-tools@bmeadowcroft-development-plugins
 ```
 
-## Local development
+### Update after changes
 
-To test a plugin without pushing to GitHub, add your local clone as a marketplace:
-
+```bash
+git pull
+claude plugin update development-tools@bmeadowcroft-development-plugins
 ```
-/plugin marketplace add /path/to/claude-plugins
-```
-
-Then install from it:
-
-```
-/plugin install <plugin-name>@bmeadowcroft-development-plugins
-```
-
-The marketplace name `bmeadowcroft-development-plugins` comes from the `name` field in `.claude-plugin/marketplace.json`. Changes to skill and agent files are picked up on the next session — no reinstall needed.
-

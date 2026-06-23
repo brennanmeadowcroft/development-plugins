@@ -210,12 +210,121 @@ Write the plan to `{feature-dir}/PLAN.md`. The plan must be:
 
 ---
 
-## Phase 5 — Confirm and Close Out
+## Phase 5 — Plan Evaluation Loop
 
-After writing PLAN.md and confirming TEST_PLAN.md was written by the qa-architect, tell the user:
+After writing PLAN.md and TEST_PLAN.md, run the planner/evaluator loop to validate the plan before materializing phase folders. This loop runs inline — do not ask the user to invoke `/plan-evaluate` separately.
+
+Locate the rubric: `rubrics/plan-evaluation-rubric.md` in the development-tools plugin directory.
+
+Initialize `{feature-dir}/review-history.md` from `review-history.template.md` with the feature name and document type "PLAN.md".
+
+### Per round (up to 3):
+
+**Step A — Spawn document-evaluator**
+
+Spawn `subagent_type: "development-tools:document-evaluator"` (or `"general-purpose"` if not available).
+
+Provide:
+- Full content of `{feature-dir}/PLAN.md`
+- Full content of `{feature-dir}/TEST_PLAN.md`
+- Full content of `{discovery-dir}/PRD.md`
+- The rubric file path
+- The review history file path: `{feature-dir}/review-history.md`
+- The current round number
+- The feature directory path: `{feature-dir}` (for writing ACCEPTANCE_CRITERIA.md per phase when approved)
+- Instruction: "Evaluate the PLAN.md and TEST_PLAN.md against the rubric and the PRD. Append your findings to review-history.md. If your verdict is Approved or Approved with concerns, also generate ACCEPTANCE_CRITERIA.md for each implementation phase as described in the rubric."
+
+Wait for the evaluator to return.
+
+**Step B — Check verdict**
+
+- **Approved** or **Approved with concerns**: exit the loop. Go to Phase 6.
+- **Needs revision** and round < 3: continue to Step C.
+- **Needs revision** and round = 3: go to Phase 7 (escalation).
+
+**Step C — Address Critical findings**
+
+Read `{feature-dir}/review-history.md` and extract the Critical findings from this round.
+
+Determine the responsible planning agent per finding type:
+
+| Finding type | Agent to spawn |
+|---|---|
+| Backend steps, endpoints, migrations, models, schemas, auth | `development-tools:tech-lead` |
+| Frontend components, views, props, routes | `development-tools:ui-architect` |
+| Test strategy gaps, missing scenarios | `development-tools:qa-architect` |
+| PRD coverage gaps (P0/P1 requirements absent) | Address inline: read the PRD and add the missing steps to PLAN.md |
+
+Group findings by agent. Brief each agent with the full PLAN.md content and the specific finding IDs and descriptions it must address. Instruct each agent to return only the revised content for its sections — not a full rewrite. After agents return, update PLAN.md.
+
+**Step D — Write planner response**
+
+Append to `{feature-dir}/review-history.md`:
+
+```
+### Planner Response — {YYYY-MM-DD}
+
+#### Addressed
+- [x] #{id} — {what was changed, with section/step reference}
+
+#### Not Addressed
+- [ ] #{id} — {reason}
+```
+
+Increment round and return to Step A.
+
+---
+
+## Phase 6 — Materialize Phase Folders
+
+After the plan is approved, create a self-contained folder for each implementation phase so implementing agents get precisely what they need.
+
+**Step 1 — Identify phases**
+
+Parse PLAN.md. Phases are sections named "Phase 1", "Phase 2", etc. A plan with no explicit phase sections is treated as a single Phase 1.
+
+**Step 2 — For each phase, create `{feature-dir}/phase-{N}/`** with these files:
+
+**`PHASE_PLAN.md`** — extracted vertical slice. Include:
+- Context paragraph for this phase
+- Backend steps for this phase (in dependency order)
+- Frontend steps for this phase (in dependency order)
+- Critical Scope Flags relevant to this phase
+- Verification steps for this phase
+
+Use `PHASE_PLAN.template.md` as the structural reference.
+
+**`TEST_PLAN_PHASE.md`** — test scenarios for this phase extracted from TEST_PLAN.md. Include risk areas, backend integration tests, and frontend unit tests scoped to this phase's work. Use `TEST_PLAN_PHASE.template.md` as the structural reference.
+
+**`phase-status.md`** — task checklist from the phase steps. All checkboxes unchecked. Use `phase-status.template.md` as the structural reference.
+
+**`memory.md`** — empty file with header: `# Phase {N} Memory: {Phase Description}`
+
+**`ACCEPTANCE_CRITERIA.md`** — already written by the document-evaluator in Phase 5. Verify it exists. If missing, re-spawn the document-evaluator with instruction to generate the criteria without re-evaluating.
+
+---
+
+## Phase 7 — Escalation (max rounds reached)
+
+If 3 evaluation rounds completed with Critical findings still open:
+
+1. Extract all open `[ ]` Critical findings from `{feature-dir}/review-history.md`
+2. Present to the user:
+   - What was resolved vs. what remains open
+   - Unresolved Critical findings verbatim with section references
+   - A recommendation for each: what decision is needed to unblock it
+3. Ask the user to resolve them and then re-invoke `/plan-evaluate {feature-dir}`, or to accept the risk and proceed
+
+Do not materialize phase folders until all Critical findings are resolved or explicitly accepted.
+
+---
+
+## Phase 8 — Confirm and Close Out
+
+Tell the user:
 - The paths to PLAN.md and TEST_PLAN.md
-- A one-paragraph summary: how many backend steps, how many frontend steps, what's new vs. modified
-- Any open questions raised but not resolved (should be rare)
-- If Phase 2 exists: what specifically unlocks it
-
-Do not offer to implement the plan. PLAN.md and TEST_PLAN.md are the outputs of this skill.
+- The evaluation result (approved in N rounds, any noted concerns)
+- The phase folders created and their paths
+- A one-paragraph summary: how many phases, backend steps per phase, frontend steps per phase, what's new vs. modified
+- Any open questions raised but not resolved (should be rare after the evaluation loop)
+- Next step: `/build-feature-from-plan {feature-dir}` to begin implementation
