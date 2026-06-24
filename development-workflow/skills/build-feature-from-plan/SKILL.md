@@ -2,223 +2,274 @@
 name: build-feature-from-plan
 description: >
   Orchestrates building a feature from a PLAN.md and its phase folders. For each
-  phase: spawns the backend agent (which writes tests inline), runs the code-evaluate
-  loop, then spawns the frontend agent (which writes tests inline), runs the
-  code-evaluate loop, then pauses for user validation of Tier 3 + Tier 4 items.
-  After all phases, runs a security scan. Trigger when the user says "build the
-  feature", "implement the plan", "start building", or invokes
-  /build-feature-from-plan with a plan folder path.
+  phase: dispatches one agent per task (implementation + reviewer gate), then pauses
+  for user validation when a phase has Tier 3 visual items. After all phases, runs a
+  security scan. Trigger when the user says "build the feature", "implement the plan",
+  "start building", or invokes /build-feature-from-plan with a plan folder path.
 argument-hint: "<plan-folder> [phase-number|all]"
 ---
 
 # Build Feature From Plan
 
-You are the orchestrator for building a feature from a PLAN.md and its phase folders. You delegate implementation to specialized agents, run evaluation loops after each component, and coordinate user validation before closing out.
+You are the orchestrator. You dispatch one implementer agent per task and one reviewer agent per task, tracking progress in a durable ledger. You keep your own context lean: large artifacts (diffs, reviewer findings) move as file paths; dispatch prompts are short.
+
+## Core principles
+
+- **Task file = brief**: each task file (`task-NN-*.md`) is already self-contained. Pass its path to the implementer — do not copy its content inline or write a separate brief file.
+- **Durable ledger**: the ledger (`.build-ledger.md`) is the orchestrator's sole source of truth for resumption. After compaction, trust the ledger and `git log` — not your own recollection.
+- **Lean dispatch prompts**: pass file paths, not content. The only things inline in a dispatch prompt are short operational instructions (3–5 lines). Everything else is a file reference.
+- **Model per task**: every Agent spawn specifies `model` explicitly. An omitted model silently inherits your session's most expensive model.
+- **Continuous execution**: do not pause between tasks. User gates happen at phase-level milestones only, and only when the phase has Tier 3 visual items.
 
 ## Configuration
 
-At startup, read configuration from the project's `CLAUDE.md`:
+Read from the project's `CLAUDE.md` at startup:
 
 1. Look for a `## Development Workflow` section
-2. Read the following keys (use defaults if not present):
-   - `plans-dir` → base folder for plans (default: `plans/`)
-   - `docs-dir` → base folder for documentation (default: `docs/`)
-   - `backend-agent` → agent for backend implementation (default: `development-tools:python-api-developer`)
-   - `frontend-agent` → agent for frontend implementation (default: `development-tools:vue-developer`)
+2. Read (use defaults if not present):
+   - `backend-agent` → agent for backend tasks (default: `development-tools:python-api-developer`)
+   - `frontend-agent` → agent for frontend tasks (default: `development-tools:vue-developer`)
 
-If a specified agent is not available, fall back to `general-purpose`.
+Fall back to `general-purpose` if a specified agent is unavailable.
 
 ## Arguments
 
-- `<plan-folder>` (required) — the folder containing `PLAN.md` and phase subfolders (e.g., `plans/010-share-with-friends`)
-- `[phase-number|all]` (optional) — the phase to build (e.g., `1`), or `all` to build all phases sequentially. Default: `all`
+- `<plan-folder>` (required) — folder containing `PLAN.md` and phase subfolders
+- `[phase-number|all]` (optional) — build only `phase-{N}`, or all phases in order. Default: `all`
+
+---
+
+## Model selection
+
+Read the task file's **Model** line and use it. Specify `model` on every Agent spawn.
+
+| Model | When | Roles |
+|---|---|---|
+| `haiku` | Single file, mechanical transcription, complete spec, prop-only changes | Implementer |
+| `sonnet` | Multi-file, auth logic, new complex components, view wiring | Implementer, reviewer, fix agent |
+| `opus` | Final security scan | Security scan only |
+
+Reviewer agents are always `sonnet`. Fix agents match the implementer or step up one tier if the fix requires more judgment than the original implementation.
 
 ---
 
 ## Phase 0 — Setup
 
-1. Read `{plan-folder}/PLAN.md` and note:
-   - The plan name (e.g., `010-share-with-friends`) — used in commit messages
-   - The implementation phases and their folders
-   - The Critical Scope Flags — treat these as non-negotiable throughout
+### Step 0 — Check the progress ledger
 
-2. Identify the target phase folder(s):
-   - If `phase-number` is specified: `{plan-folder}/phase-{N}/`
-   - If `all`: all `phase-{N}/` subdirectories in dependency order
+```bash
+cat {plan-folder}/.build-ledger.md 2>/dev/null
+```
 
-3. For each target phase, verify these files exist:
-   - `PHASE_PLAN.md` — required
-   - `ACCEPTANCE_CRITERIA.md` — required; if missing, tell the user to run `/plan-evaluate {plan-folder}` first
-   - `TEST_PLAN_PHASE.md` — include if present
+If the ledger exists, skip all tasks already marked `DONE`. Resume at the first incomplete task. After compaction, trust the ledger and `git log --oneline` over your own recollection.
 
-4. Run the test baseline before touching any code (use project commands from `CLAUDE.md`):
-   - Backend test suite
-   - Frontend test suite
+If no ledger, create `{plan-folder}/.build-ledger.md`:
+```
+# Build Ledger: {plan-name}
+Started: {YYYY-MM-DD}
+Branch: (set after checkout)
+Base SHA: (set after checkout)
 
-   If tests fail, stop and ask the user whether to fix the failures first or proceed (marking known-broken tests as skipped per project convention).
+## Tasks
+```
 
-5. Unless the user explicitly provides a branch name or says to work on the current branch, create a feature branch from `main`:
-   ```bash
-   git checkout main && git pull && git checkout -b feature/{plan-name}
-   ```
+### Step 1 — Permission setup
 
-6. Record the pre-implementation HEAD SHA for use as the diff base in evaluation:
-   ```bash
-   git rev-parse HEAD
-   ```
-   Write it to `{phase-folder}/phase-status.md` under a "Implementation base SHA" note.
+If this is the first build in this project, recommend the user run `/fewer-permission-prompts` before proceeding. The task loop runs many git commands and test suites. Pre-allowlisting prevents constant prompts.
 
----
+### Step 2 — Read PLAN.md (once)
 
-## Phase 1 — Backend Implementation + Evaluation
+Read `{plan-folder}/PLAN.md`. Extract and keep in working memory:
+- Plan name (for commit messages)
+- Phase numbers and descriptions
+- Critical Scope Flags (verbatim)
 
-Repeat for each target phase in order.
+Do not re-read PLAN.md after this step.
 
-### Step A — Spawn backend agent
+### Step 3 — Identify target phases and tasks
 
-Spawn `{backend-agent}` to implement the backend component.
+- `phase-number` specified: only `{plan-folder}/phase-{N}/`
+- `all`: all `phase-{N}/` directories in numeric order
 
-Brief the agent with:
-- Full content of `{phase-folder}/PHASE_PLAN.md`
-- Full content of `{phase-folder}/TEST_PLAN_PHASE.md` (if present)
-- Full content of `{phase-folder}/ACCEPTANCE_CRITERIA.md`
-- Instruction: implement **only the Backend section** steps, in the order listed
-- Instruction: **write tests alongside the implementation** (TDD) — the test scenarios in TEST_PLAN_PHASE.md define what to cover; write them as you implement each step
-- Instruction: tests must satisfy the Tier 1 commands listed in ACCEPTANCE_CRITERIA.md
-- The Critical Scope Flags for this phase — treat these as non-negotiable
-- Instruction to commit when done: `[{plan-name}] Phase {N} backend implementation`
-- The content of `{phase-folder}/memory.md` if it contains prior implementation notes
+For each target phase, read `phase-{N}/tasks/TASK_INDEX.md` to get the ordered task list.
 
-Wait for the backend agent to complete.
+If task files don't exist (plan predates this skill version): treat the whole phase as one task using `PHASE_PLAN.md` as the spec, and note this to the user.
 
-### Step B — Run code evaluation loop
+Verify for each phase:
+- `PHASE_PLAN.md` exists
+- `ACCEPTANCE_CRITERIA.md` exists (if missing, tell user to run `/plan-evaluate {plan-folder}` first)
+- `tasks/TASK_INDEX.md` exists
 
-Run the evaluation inline (up to 3 rounds):
+### Step 4 — Baseline + branch
 
-**Round setup**: read `{phase-folder}/ACCEPTANCE_CRITERIA.md` Tier 1 commands. Run each command and capture exit code + output.
+Run the test baseline (from `CLAUDE.md`). If tests fail, ask the user whether to fix them or proceed with known failures noted.
 
-**Spawn code-evaluator** (`development-tools:code-evaluator` or `general-purpose`):
-- PHASE_PLAN.md content
-- ACCEPTANCE_CRITERIA.md content
-- Tier 1 results
-- Base SHA (from Phase 0 Step 6), HEAD SHA
-- Diff: `git diff {base-sha}..HEAD`
-- Round number
-- Review history: `{phase-folder}/review-history.md`
-- Component: `backend`
+```bash
+git checkout main && git pull && git checkout -b feature/{plan-name}
+```
 
-If verdict is **Needs fixes**:
-- Read Critical findings from `{phase-folder}/review-history.md`
-- Spawn `{backend-agent}` with the findings and instruction to fix only what is listed
-- Agent commits: `[{plan-name}] Phase {N} backend evaluation fixes (round {N})`
-- Re-run evaluation (max 3 rounds total)
-
-If max rounds exceeded with open Critical findings: surface to user (see escalation note at end of skill).
-
-Mark backend evaluation checkboxes complete in `{phase-folder}/phase-status.md`.
+Record in the ledger:
+```
+Branch: feature/{plan-name}
+Base SHA: {git rev-parse HEAD}
+```
 
 ---
 
-## Phase 2 — Frontend Implementation + Evaluation
+## Phase 1 — Execute Tasks
 
-### Step A — Spawn frontend agent
+For each target phase, execute every task in `TASK_INDEX.md` order. **Check the ledger before each task — skip tasks already marked DONE.**
 
-Spawn `{frontend-agent}` to implement the frontend component.
+### Per-task loop (Steps A–E)
 
-Brief the agent with:
-- Full content of `{phase-folder}/PHASE_PLAN.md`
-- Full content of `{phase-folder}/TEST_PLAN_PHASE.md` (if present)
-- Full content of `{phase-folder}/ACCEPTANCE_CRITERIA.md`
-- Instruction: implement **only the Frontend section** steps, in the order listed
-- Instruction: **write tests alongside the implementation** (TDD) — the test scenarios in TEST_PLAN_PHASE.md define what to cover; write them as you implement each component
-- Instruction: tests must satisfy the Tier 1 commands listed in ACCEPTANCE_CRITERIA.md
-- The Critical Scope Flags for this phase
-- Instruction to commit when done: `[{plan-name}] Phase {N} frontend implementation`
-- The content of `{phase-folder}/memory.md` if it contains prior implementation notes
+#### Step A — Record pre-task SHA
 
-Wait for the frontend agent to complete.
+```bash
+git rev-parse HEAD
+```
 
-### Step B — Run code evaluation loop
+Store as `{task}-base-sha`. This is the diff base for the reviewer.
 
-Same structure as Phase 1 Step B, with component: `frontend` and agent: `{frontend-agent}`.
+#### Step B — Dispatch the implementer
 
-Mark frontend evaluation checkboxes complete in `{phase-folder}/phase-status.md`.
+Read the task file's **Model** line. Determine agent type from the task path (tasks in the Backend section → `{backend-agent}`; Frontend section → `{frontend-agent}`).
+
+Dispatch prompt (keep to 5 lines — no content pasted inline):
+```
+Read {phase-folder}/tasks/{task-file}.md — it is your complete spec.
+Implement everything listed. Write or update the tests in the Test cycle section.
+Commit using the exact message in the task file.
+Write a one-paragraph result to {phase-folder}/tasks/{task-slug}-result.md:
+  what was implemented, tests run (N passed / M failed), commit SHA, any deviations.
+Return only: status (DONE / DONE_WITH_CONCERNS / NEEDS_CONTEXT / BLOCKED), commit SHA, test summary.
+```
+
+Wait for the compact return.
+
+**Handle status:**
+- **DONE**: proceed to Step C
+- **DONE_WITH_CONCERNS**: read the result file; if the concern is about correctness or scope, treat as Critical and go to Step D; if it's an observation, note in ledger and proceed to Step C
+- **NEEDS_CONTEXT**: provide the missing context and re-dispatch (same model)
+- **BLOCKED**: escalate to user (see Escalation note)
+
+#### Step C — Reviewer gate
+
+Generate the diff:
+```bash
+git diff {task-base-sha}..HEAD > /tmp/{task-slug}.diff
+```
+
+Dispatch prompt for `development-tools:code-evaluator` with `model: "sonnet"`:
+```
+Spec: {phase-folder}/tasks/{task-file}.md (read the Reviewer checklist section)
+Implementer result: {phase-folder}/tasks/{task-slug}-result.md
+Diff: /tmp/{task-slug}.diff
+Phase Critical Scope Flags: {paste the flags inline — they are short}
+Write your findings to {phase-folder}/tasks/{task-slug}-review.md
+Return: verdict (Approved | Needs fixes), one-line summary of findings.
+```
+
+**Check verdict:**
+- **Approved** or **Approved with concerns**: go to Step E
+- **Needs fixes**: go to Step D
+
+#### Step D — Fix loop (up to 3 rounds)
+
+Read Critical and Important findings from `{phase-folder}/tasks/{task-slug}-review.md`.
+
+Dispatch the fix agent (same agent type as implementer, model `sonnet` or up one tier if needed):
+```
+Fix findings in {phase-folder}/tasks/{task-slug}-review.md (Critical and Important only).
+Spec: {phase-folder}/tasks/{task-file}.md
+Fix only what is listed — do not refactor unrelated code.
+Run the task's test cycle. Confirm it passes.
+Append fix summary to {phase-folder}/tasks/{task-slug}-result.md.
+Return: status, new commit SHA, test summary.
+```
+
+After the fix agent returns, regenerate the diff (`/tmp/{task-slug}.diff`) and re-dispatch the reviewer (Step C). Max 3 reviewer rounds per task.
+
+If 3 rounds complete with Critical findings still open: escalate to user (see Escalation note).
+
+#### Step E — Update ledger and TASK_INDEX
+
+Append to `.build-ledger.md`:
+```
+- {task-slug}: DONE (commit {SHA}, {N} tests passed, reviewer: Approved)
+```
+
+Update `{phase-folder}/tasks/TASK_INDEX.md`: check the box for this task.
 
 ---
 
-## Phase 3 — User Validation Gate
+## Phase 2 — User Validation Gate (per phase)
 
-**Stop here and present to the user:**
+After all tasks in a phase are complete, read `{phase-folder}/ACCEPTANCE_CRITERIA.md`:
 
-1. What was built — a one-paragraph summary of the backend and frontend work completed for this phase
-2. **Tier 3 checklist** (verbatim from `{phase-folder}/ACCEPTANCE_CRITERIA.md` Tier 3) — what to verify manually in the browser or app. Present each item as a numbered step.
-3. **Tier 4 checklist** (verbatim from `{phase-folder}/ACCEPTANCE_CRITERIA.md` Tier 4) — product acceptance questions for the user to answer
-4. Test suite status (pass/fail counts from the last evaluation round)
-5. Any Important findings noted but not blocking (for awareness)
+- **Phase has Tier 3 items (visual/UX)**: pause for user validation
+- **Phase has only Tier 1/2 items** (backend-only phases): continue automatically — do not pause
 
-**Ask the user to:**
-- Work through the Tier 3 checklist and report any visual/UX issues
-- Answer the Tier 4 product acceptance questions
-- Explicitly confirm when ready to proceed
+**When pausing, present:**
+
+1. What was built — one paragraph summarizing the phase (from task result files, not re-reading source)
+2. **Tier 3 checklist** (verbatim from ACCEPTANCE_CRITERIA.md) — steps to verify in the browser or app
+3. **Tier 4 checklist** (verbatim from ACCEPTANCE_CRITERIA.md) — product acceptance questions
+4. Test summary (aggregate from ledger entries for this phase)
+5. Any DONE_WITH_CONCERNS notes from the ledger
 
 **Do not proceed until the user explicitly confirms.**
 
-If the user reports issues or requests changes:
-1. Determine whether the change is backend, frontend, or both
-2. Spawn the relevant agent with a precise description of what to change and why
-3. Run the relevant Tier 1 commands and re-run the code-evaluate loop
-4. Present the Tier 3 checklist again and ask the user to re-validate
-5. Repeat until the user explicitly confirms
+If the user reports issues:
+1. Identify which task(s) are affected
+2. Dispatch the fix agent for each, re-run the reviewer gate (Steps C/D)
+3. Update the ledger and TASK_INDEX, then re-present the Tier 3 checklist
 
-Once confirmed, mark Tier 3 and Tier 4 checkboxes complete in `{phase-folder}/phase-status.md`.
+Once confirmed, append to the ledger:
+```
+- Phase {N}: User Confirmed
+```
 
 ---
 
-## Repeat Phases 1–3 for each subsequent phase
+## Phase 3 — Repeat for subsequent phases
 
-After the user validates Phase 1, proceed to Phase 1–3 for Phase 2 (if it exists), and so on.
-
-Each phase is fully validated before the next phase begins.
+Continue Phases 1–2 for each remaining phase. Each task implementer starts fresh. The only shared state is the ledger and git history.
 
 ---
 
 ## Phase 4 — Security Scan
 
-Once all phases are confirmed by the user, invoke the `/scan` skill (or the project's security scan command) on the changed files.
+Once all phases are confirmed, run the security scan with `model: "opus"`.
 
-If the scan reports issues:
-- **Critical or high severity**: spawn the relevant agent to fix. Re-run the scan after fixes.
-- **Medium severity**: present to the user with a recommendation and let them decide.
-- **Low / informational**: report to the user; do not block.
+- **Critical / high**: spawn fix agent (`sonnet`), re-scan
+- **Medium**: present to user with recommendation
+- **Low / informational**: report only
 
 ---
 
 ## Phase 5 — Close Out
 
-1. Run the full verification checklist from `PLAN.md` one final time. If any step fails, fix it before closing out.
+1. Run the full verification checklist from `PLAN.md`. Fix any failures.
 
-2. For each phase folder, update `{phase-folder}/memory.md` with:
-   - Non-obvious implementation decisions made during this build
-   - Deviations from the plan and why
-   - Challenges encountered and how they were resolved
-   - Anything a future engineer would need to know that is not obvious from the code
+2. For each phase, update `{phase-folder}/memory.md` with non-obvious decisions, deviations from the plan, and anything a future engineer would need to know.
 
-   Do not document routine changes — focus on the surprising, non-obvious, and risk-mitigating.
-
-3. Mark all remaining tasks complete in each `{phase-folder}/phase-status.md`.
+3. Clean up temp diff files:
+   ```bash
+   rm -f /tmp/{plan-name}-*.diff
+   ```
+   Result and review files in `tasks/` stay — they are the permanent record of what was built and why.
 
 4. Report to the user:
-   - What was built and committed (by phase)
+   - What was built (by phase, with commit ranges from the ledger)
    - Any deferred items or known limitations
-   - The branch name and suggested PR title: `[{plan-name}] {feature description}`
+   - Branch name and suggested PR title: `[{plan-name}] {feature description}`
 
 ---
 
 ## Escalation note
 
-If the code evaluation loop reaches 3 rounds with Critical findings still open for any component, stop and present the situation to the user:
-- The unresolved findings verbatim
-- What the fix agent attempted
-- Options: fix manually, adjust the plan, or proceed accepting the risk
+If a task's fix loop reaches 3 rounds with Critical findings still open:
 
-Do not skip to the next phase until the current phase's evaluation is resolved or explicitly accepted.
+1. Surface the open findings verbatim (from the review file), what was attempted, and options: fix manually, adjust the task spec, or proceed accepting the risk
+2. If the user fixes manually: re-run the reviewer gate (Step C) before marking the task done
+3. Do not proceed to the next task until the current task is resolved or explicitly accepted

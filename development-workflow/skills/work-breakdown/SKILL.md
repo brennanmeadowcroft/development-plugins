@@ -195,7 +195,28 @@ Write the plan to `{feature-dir}/PLAN.md`. The plan must be:
 9. Store type additions
 10. Router guard changes (if any)
 
-**Phase 2** (if applicable): A brief section listing what ships in Phase 2, why it's deferred, and what unlocks it.
+### Phase splitting rules
+
+The structure of phases determines what agents can verify, what the user can validate, and how much context each implementation agent needs. Apply these rules when deciding what goes in each phase:
+
+**Backend-first.** If the feature has both backend and frontend work, backend phases must come first. A frontend phase that calls new endpoints cannot be tested until those endpoints exist.
+
+**One frontend phase = one visual slice.** Each frontend phase must include everything needed to visually verify it end-to-end. This means: the shared components that are new AND the views that wire them together, in the same phase. Never split "build shared components" and "wire them into views" across separate phases — the components cannot be meaningfully reviewed in isolation. A Tier 3 checklist of "check how the component looks" is unanswerable if the component isn't rendered anywhere.
+
+**Corollary: no stub-only phases.** If a set of frontend steps produces components that aren't mounted in any view until a later phase, two options:
+  - Move the components to the same phase as their consuming views, OR
+  - Write those steps' Tier 3 as "verified by unit tests only; visual check deferred to Phase X" — do not ask the user to visually verify unwired components
+
+**Phase size target.** Aim for phases that touch ~15–20 files at most. If a single phase would touch significantly more, split it along a natural seam (e.g., by feature area or by screen).
+
+**Recommended structure for mixed backend/frontend features:**
+1. Phase 1: All backend changes + backend tests (fully testable via pytest/jest without UI)
+2. Phase 2: All frontend changes, or a first frontend slice — include shared components AND the feature views that use them so the full flow is visually verifiable end-to-end
+3. Phase 3+: Additional frontend slices (if too large for one phase), each equally complete and verifiable
+
+**Deferred phases.** Phase 3 (or later) for out-of-scope work: one brief section listing what it delivers, why it's deferred, and what must exist before it can build.
+
+---
 
 **Critical Scope Flags**: A numbered list of the highest-risk items from all agents — security holes, silent bugs, missing dependencies, env vars that must be set in production.
 
@@ -216,7 +237,7 @@ After writing PLAN.md and TEST_PLAN.md, run the planner/evaluator loop to valida
 
 Locate the rubric: `rubrics/plan-evaluation-rubric.md` in the development-tools plugin directory.
 
-Initialize `{feature-dir}/review-history.md` from `review-history.template.md` with the feature name and document type "PLAN.md".
+Initialize `{feature-dir}/review-history.md` from `templates/review-history.template.md` with the feature name and document type "PLAN.md".
 
 ### Per round (up to 3):
 
@@ -224,15 +245,22 @@ Initialize `{feature-dir}/review-history.md` from `review-history.template.md` w
 
 Spawn `subagent_type: "development-tools:document-evaluator"` (or `"general-purpose"` if not available).
 
-Provide:
-- Full content of `{feature-dir}/PLAN.md`
-- Full content of `{feature-dir}/TEST_PLAN.md`
-- Full content of `{discovery-dir}/PRD.md`
-- The rubric file path
-- The review history file path: `{feature-dir}/review-history.md`
-- The current round number
-- The feature directory path: `{feature-dir}` (for writing ACCEPTANCE_CRITERIA.md per phase when approved)
-- Instruction: "Evaluate the PLAN.md and TEST_PLAN.md against the rubric and the PRD. Append your findings to review-history.md. If your verdict is Approved or Approved with concerns, also generate ACCEPTANCE_CRITERIA.md for each implementation phase as described in the rubric."
+Pass file paths — not content. The evaluator reads what it needs.
+
+```
+Files to read:
+- PLAN.md: {feature-dir}/PLAN.md
+- TEST_PLAN.md: {feature-dir}/TEST_PLAN.md (present: {yes|no})
+- PRD.md: {discovery-dir}/PRD.md
+- Rubric: {rubric-path}
+- Review history: {feature-dir}/review-history.md
+- Feature directory: {feature-dir}
+- Round: {N}
+
+Instruction: Evaluate PLAN.md and TEST_PLAN.md against the rubric and the PRD.
+Append your findings to review-history.md. If your verdict is Approved or Approved
+with concerns, also generate ACCEPTANCE_CRITERIA.md for each implementation phase.
+```
 
 Wait for the evaluator to return.
 
@@ -255,7 +283,13 @@ Determine the responsible planning agent per finding type:
 | Test strategy gaps, missing scenarios | `development-tools:qa-architect` |
 | PRD coverage gaps (P0/P1 requirements absent) | Address inline: read the PRD and add the missing steps to PLAN.md |
 
-Group findings by agent. Brief each agent with the full PLAN.md content and the specific finding IDs and descriptions it must address. Instruct each agent to return only the revised content for its sections — not a full rewrite. After agents return, update PLAN.md.
+Group findings by agent. Brief each agent with:
+- Path to PLAN.md: `{feature-dir}/PLAN.md` — the agent reads it
+- The specific Critical finding IDs and descriptions (verbatim from review-history.md) it must address — these are short, paste inline
+- Instruction to return only the revised content for its sections — not a full rewrite
+- Instruction not to change sections unrelated to its findings
+
+After agents return, update PLAN.md with the revised sections.
 
 **Step D — Write planner response**
 
@@ -277,30 +311,71 @@ Increment round and return to Step A.
 
 ## Phase 6 — Materialize Phase Folders
 
-After the plan is approved, create a self-contained folder for each implementation phase so implementing agents get precisely what they need.
+After the plan is approved, create a self-contained folder for each implementation phase with task-level breakdowns so each implementing agent gets precisely what it needs.
 
 **Step 1 — Identify phases**
 
 Parse PLAN.md. Phases are sections named "Phase 1", "Phase 2", etc. A plan with no explicit phase sections is treated as a single Phase 1.
 
+**Step 1.5 — Apply phase quality check**
+
+Before materializing folders, verify each phase passes the splitting rules from Phase 4:
+
+1. **Visual verifiability check**: For each frontend phase, confirm it includes at least one mounted view or route (not just shared components in isolation). If a phase only produces shared components with no consuming view, flag it: either merge the components into the next phase that wires them, or annotate those steps' Tier 3 as "unit-test verified only; visual check deferred to Phase {next}."
+
+2. **Backend-before-frontend check**: No frontend phase appears before the backend phase it depends on.
+
+3. **Size check**: Count tasks in scope per phase. If any phase has more than ~15 distinct tasks, recommend splitting it to the user before materializing.
+
+If any check fails, revise the phase breakdown in PLAN.md before continuing. Do not materialize folders for a phase that will produce unverifiable Tier 3 items.
+
 **Step 2 — For each phase, create `{feature-dir}/phase-{N}/`** with these files:
 
-**`PHASE_PLAN.md`** — extracted vertical slice. Include:
+**`PHASE_PLAN.md`** — extracted vertical slice for human reference. Include:
 - Context paragraph for this phase
 - Backend steps for this phase (in dependency order)
 - Frontend steps for this phase (in dependency order)
 - Critical Scope Flags relevant to this phase
 - Verification steps for this phase
 
-Use `PHASE_PLAN.template.md` as the structural reference.
+Use `templates/PHASE_PLAN.template.md` as the structural reference.
 
-**`TEST_PLAN_PHASE.md`** — test scenarios for this phase extracted from TEST_PLAN.md. Include risk areas, backend integration tests, and frontend unit tests scoped to this phase's work. Use `TEST_PLAN_PHASE.template.md` as the structural reference.
-
-**`phase-status.md`** — task checklist from the phase steps. All checkboxes unchecked. Use `phase-status.template.md` as the structural reference.
+**`TEST_PLAN_PHASE.md`** — test scenarios for this phase extracted from TEST_PLAN.md. Include risk areas, backend integration tests, and frontend unit tests scoped to this phase's work. Use `templates/TEST_PLAN_PHASE.template.md` as the structural reference.
 
 **`memory.md`** — empty file with header: `# Phase {N} Memory: {Phase Description}`
 
 **`ACCEPTANCE_CRITERIA.md`** — already written by the document-evaluator in Phase 5. Verify it exists. If missing, re-spawn the document-evaluator with instruction to generate the criteria without re-evaluating.
+
+**Step 3 — Generate task files for each phase**
+
+For every numbered step in the phase (each "Step N — Title" in PHASE_PLAN.md Backend and Frontend sections), create a corresponding task file at `{feature-dir}/phase-{N}/tasks/task-{NN}-{slug}.md` following `templates/TASK.template.md`.
+
+**Task right-sizing:** A task is the smallest unit that carries its own test cycle and is worth a fresh reviewer's gate. Fold tightly-coupled steps into one task if a reviewer could not meaningfully approve one while rejecting its neighbor (e.g., models.py + invites.py when they share a renamed relationship that must ship atomically). Split a step into multiple tasks if it touches more than ~5 files or has independently verifiable sub-deliverables.
+
+**For each task file, populate:**
+
+- **Context**: one sentence from the plan step — what this task delivers and why
+- **Files table**: copy exact paths from the plan step's description. Mark Create/Modify/Test. Be exact — no "similar to above."
+- **Interfaces section**: this is the most critical part. Trace the dependency chain:
+  - *Consumes*: what does this task need from earlier tasks in this phase or prior phases? Name the function, type, endpoint, or field and the task that produces it. If the consuming agent won't see it in their files, describe the signature.
+  - *Produces*: what does this task make available for later tasks? Name it and give its shape (function signature, TypeScript type, API response schema, etc.).
+- **Critical Scope Flags**: copy any flags from PLAN.md that apply specifically to this step
+- **Implementation notes**: copy exact code snippets, SQL, field definitions, or prop signatures verbatim from the plan step. Do not write "see PLAN.md."
+- **Test cycle**: the exact command(s) to run and what must be true. For backend tasks, name the specific test functions if they're in TEST_PLAN_PHASE.md. For frontend tasks, name the spec file.
+- **Model hint**: `haiku` for mechanical transcription (single file, complete spec provided, prop addition only); `sonnet` for multi-file coordination, auth logic, new complex components, or view wiring
+- **Reviewer checklist**: 3–5 structural checks the reviewer can verify from the diff
+
+**Also create `{feature-dir}/phase-{N}/tasks/TASK_INDEX.md`** — a checkbox list of all tasks in execution order. The build orchestrator updates these boxes as tasks complete; this is the human-visible progress view.
+
+```markdown
+# Phase {N} Task Index: {Phase Description}
+
+- [ ] [task-01-{slug}.md](task-01-{slug}.md) — {Task Name}
+- [ ] [task-02-{slug}.md](task-02-{slug}.md) — {Task Name}
+...
+```
+
+Tasks execute in the listed order. If a task has no Interfaces dependency on the immediately prior task, note the earliest it can run — but implement in order by default.
 
 ---
 

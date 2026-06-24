@@ -2,11 +2,10 @@
 name: code-evaluate
 description: >
   Evaluates a completed backend or frontend phase implementation against the phase
-  plan and acceptance criteria. Runs Tier 1 commands directly, spawns the code-evaluator
-  agent for Tier 2 inspection, and surfaces Tier 3 items for user review. Up to 3 rounds
-  with a fix loop before escalating to the user. Also called internally by
-  build-feature-from-plan after each component implementation. Trigger when the user
-  says "evaluate the code", "run code eval", or invokes /code-evaluate with a phase
+  plan and acceptance criteria. Runs Tier 1 commands, spawns the code-evaluator
+  agent for Tier 2 inspection, and surfaces Tier 3 items for user review. Up to 3
+  rounds with a fix loop before escalating to the user. Trigger when the user says
+  "evaluate the code", "run code eval", or invokes /code-evaluate with a phase
   folder and component.
 argument-hint: "<phase-folder> [backend|frontend]"
 ---
@@ -35,19 +34,15 @@ Precedence: per-invocation argument > `CLAUDE.md` value > hardcoded default.
 
 ## Phase 1 — Setup
 
-Read in parallel:
+Verify these files exist:
 - `{phase-folder}/PHASE_PLAN.md` — required; stop if missing
 - `{phase-folder}/ACCEPTANCE_CRITERIA.md` — required; if missing, tell the user to run `/plan-evaluate` first
-- `{phase-folder}/review-history.md` — read if present
 
 Capture the current HEAD SHA: `git rev-parse HEAD`
 
-Determine the base SHA for the diff:
-- Read `{phase-folder}/phase-status.md` for the recorded implementation start SHA if available
-- Otherwise: use `git log --oneline -10` to identify the commit before this component's implementation began, and use that SHA
-- Record the base SHA for use across all rounds
+Determine the base SHA for the diff using `git log --oneline -20` to identify the commit before this component's implementation began. Record it — use the same base SHA across all rounds so the diff always covers the full implementation.
 
-Initialize `{phase-folder}/review-history.md` from the template if it does not exist.
+Initialize `{phase-folder}/review-history.md` from `templates/review-history.template.md` if it does not exist.
 
 ---
 
@@ -59,31 +54,43 @@ Evaluate components in order: backend first if both are in scope, then frontend.
 
 **Step A — Run Tier 1 commands**
 
-Read the Tier 1 section of `{phase-folder}/ACCEPTANCE_CRITERIA.md`. Run every command listed:
-- Capture stdout, stderr, and exit code for each
+Read `{phase-folder}/ACCEPTANCE_CRITERIA.md` for the Tier 1 command list. Run every command:
 - Do not stop on failure — run all commands and collect all results
-- Record results as a structured list: command, exit code, output (truncated to relevant portion if long)
+- Capture all output to a file: `git diff {base-sha}..HEAD > /tmp/{phase-slug}-tier1-r{round}.txt` — use a separate file per round so prior rounds' output stays accessible
+
+Actually capture Tier 1 output:
+```bash
+{tier-1-command} > /tmp/{phase-slug}-{component}-tier1-r{round}.txt 2>&1; echo "Exit: $?" >> /tmp/{phase-slug}-{component}-tier1-r{round}.txt
+```
+
+Run each command and capture to the same file. Record exit codes.
 
 **Step B — Generate diff**
 
-Run: `git diff {base-sha}..HEAD > /tmp/phase-{N}-{component}-diff.txt`
-
-Use the base SHA captured in Phase 1 so the diff always covers the full implementation including any fixes from prior rounds.
+```bash
+git diff {base-sha}..HEAD > /tmp/{phase-slug}-{component}-r{round}.diff
+```
 
 **Step C — Spawn code-evaluator**
 
-Spawn `subagent_type: "development-tools:code-evaluator"` (or `"general-purpose"` if not available).
+Spawn `subagent_type: "development-tools:code-evaluator"` (or `"general-purpose"` if not available) with `model: "sonnet"`.
 
-Provide:
-- Full content of `{phase-folder}/PHASE_PLAN.md`
-- Full content of `{phase-folder}/ACCEPTANCE_CRITERIA.md`
-- Tier 1 results (each command, its exit code, and relevant output)
-- Base SHA: `{base-sha}`
-- HEAD SHA: current HEAD
-- Diff file path: `/tmp/phase-{N}-{component}-diff.txt`
-- The current round number
-- Review history file path: `{phase-folder}/review-history.md`
-- The component being evaluated: backend or frontend
+Pass file paths — not content. The evaluator reads what it needs.
+
+```
+Files to read:
+- Phase plan: {phase-folder}/PHASE_PLAN.md
+- Acceptance criteria: {phase-folder}/ACCEPTANCE_CRITERIA.md
+- Tier 1 results file: /tmp/{phase-slug}-{component}-tier1-r{round}.txt
+- Diff file: /tmp/{phase-slug}-{component}-r{round}.diff
+- Review history: {phase-folder}/review-history.md
+
+Context:
+- Base SHA: {base-sha}
+- HEAD SHA: {current HEAD}
+- Round: {N}
+- Component: {backend | frontend}
+```
 
 Wait for the evaluator to return.
 
@@ -97,17 +104,23 @@ Wait for the evaluator to return.
 
 Read the Critical findings from `{phase-folder}/review-history.md` for this round.
 
-Spawn the relevant implementation agent:
+Spawn the relevant implementation agent with `model: "sonnet"`:
 - Backend findings → `{backend-agent}`
 - Frontend findings → `{frontend-agent}`
 
-Brief the agent with:
-- The full content of `{phase-folder}/PHASE_PLAN.md`
-- The full content of `{phase-folder}/ACCEPTANCE_CRITERIA.md`
-- The Critical and Important finding IDs and descriptions (verbatim from review-history.md)
-- Instruction: fix only what is listed — do not refactor unrelated code
-- Instruction: write or fix tests as needed based on the findings
-- Instruction to commit when complete with message: `[{plan-name}] Fix {component} evaluation findings (round {N})`
+Pass file paths — not content:
+```
+Files to read:
+- Phase plan: {phase-folder}/PHASE_PLAN.md
+- Acceptance criteria: {phase-folder}/ACCEPTANCE_CRITERIA.md
+
+Fix these Critical and Important findings (paste verbatim — they are short):
+{findings from review-history.md}
+
+Instruction: fix only what is listed. Do not refactor unrelated code.
+Instruction: write or fix tests as needed.
+Commit when complete: [{plan-name}] Fix {component} evaluation findings (round {N})
+```
 
 Wait for the agent to complete. Increment round number and return to Step A.
 
@@ -122,10 +135,7 @@ After all components pass evaluation (or max rounds reached and escalated):
 1. **Tier 1 + 2 status**: All checks passed / N issues resolved after M rounds
 2. **Tier 3 checklist** (verbatim from ACCEPTANCE_CRITERIA.md Tier 3): what to verify manually in the browser or app
 3. Any Important findings noted but not blocking (with their IDs for reference)
-4. Next step: the user should work through the Tier 3 checklist, then confirm for the Tier 4 product acceptance step
-
-**Update `{phase-folder}/phase-status.md`**:
-- Mark backend and frontend Tier 1 and Tier 2 evaluation checkboxes as complete
+4. Next step: the user should work through the Tier 3 checklist
 
 ---
 
