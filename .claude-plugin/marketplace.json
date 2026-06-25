@@ -31,6 +31,11 @@
       "name": "product-discovery",
       "source": "./product-discovery",
       "description": "Structured product discovery and feature enhancement workflows that produce complete PRDs — including UX design specs and technical solutions — ready for development planning."
+    },
+    {
+      "name": "system-architect",
+      "source": "./system-architect",
+      "description": "Interactive system architecture sounding board for brainstorming design problems, exploring approaches, and producing grounded documentation."
     }
   ]
 }

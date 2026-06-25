@@ -1,0 +1,6 @@
+{
+  "name": "system-architect",
+  "description": "Interactive system architecture sounding board for brainstorming design problems, exploring approaches, and producing grounded documentation.",
+  "version": "1.0.0",
+  "author": { "name": "Brennan" }
+}

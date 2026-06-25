@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+
+  <!-- Mermaid: renders <pre class="mermaid"> blocks -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+
+  <!-- highlight.js: syntax highlights <code> blocks -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #1a1a1a;
+      background: #f5f5f5;
+      padding: 24px;
+    }
+
+    header {
+      margin-bottom: 24px;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #111;
+    }
+
+    header p {
+      font-size: 13px;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    /* ── Comparison grid ── */
+    .comparison {
+      display: grid;
+      gap: 16px;
+      align-items: start;
+    }
+
+    /* Auto-fit columns: 2 options → 2 cols, 3 options → 3 cols */
+    .comparison.cols-2 { grid-template-columns: repeat(2, 1fr); }
+    .comparison.cols-3 { grid-template-columns: repeat(3, 1fr); }
+
+    /* ── Option card ── */
+    .option {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .option-header {
+      padding: 12px 16px;
+      background: #f8f8f8;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .option-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #888;
+      margin-bottom: 2px;
+    }
+
+    .option-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #111;
+    }
+
+    .option-desc {
+      font-size: 13px;
+      color: #555;
+      margin-top: 4px;
+    }
+
+    .option-body {
+      padding: 16px;
+    }
+
+    /* ── Section labels within a card ── */
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #999;
+      margin: 16px 0 8px;
+    }
+
+    .section-label:first-child { margin-top: 0; }
+
+    /* ── Code blocks ── */
+    pre {
+      background: #f6f8fa;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 12px;
+      overflow-x: auto;
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace;
+    }
+
+    /* Inline code */
+    p code, li code {
+      background: #f0f0f0;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      font-size: 12px;
+    }
+
+    /* ── Mermaid diagrams ── */
+    pre.mermaid {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 16px;
+      display: flex;
+      justify-content: center;
+      overflow-x: auto;
+    }
+
+    /* ── Tradeoffs ── */
+    .tradeoffs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 4px;
+    }
+
+    .tradeoff-col h4 {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .tradeoff-col.pros h4 { color: #2a7a3b; }
+    .tradeoff-col.cons h4 { color: #c0392b; }
+
+    .tradeoff-col ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .tradeoff-col ul li {
+      font-size: 12.5px;
+      color: #444;
+      padding: 2px 0 2px 14px;
+      position: relative;
+    }
+
+    .tradeoff-col.pros li::before { content: "+"; position: absolute; left: 0; color: #2a7a3b; font-weight: 600; }
+    .tradeoff-col.cons li::before { content: "−"; position: absolute; left: 0; color: #c0392b; font-weight: 600; }
+
+    /* ── Notes bar (full-width below comparison) ── */
+    .notes {
+      margin-top: 20px;
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .notes h3 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+
+    .notes p, .notes li {
+      font-size: 13px;
+      color: #555;
+    }
+
+    .notes ul {
+      padding-left: 18px;
+      margin-top: 4px;
+    }
+
+    .notes li { margin-bottom: 4px; }
+
+    /* ── Recommendation badge ── */
+    .option.recommended {
+      border-color: #3b82f6;
+    }
+
+    .option.recommended .option-header {
+      background: #eff6ff;
+      border-bottom-color: #bfdbfe;
+    }
+
+    .recommendation-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #2563eb;
+      background: #dbeafe;
+      border-radius: 4px;
+      padding: 1px 6px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    @media (max-width: 700px) {
+      .comparison.cols-2,
+      .comparison.cols-3 { grid-template-columns: 1fr; }
+      .tradeoffs { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <script>
+    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+    document.addEventListener('DOMContentLoaded', () => hljs.highlightAll());
+  </script>
+
+  <header>
+    <h1>{{TITLE}}</h1>
+    <p>{{SUBTITLE}}</p>
+  </header>
+
+  <!--
+    USAGE GUIDE FOR THE SKILL
+    =========================
+    Replace {{TITLE}} and {{SUBTITLE}} above with the comparison topic and a brief description.
+
+    Choose the right grid class on .comparison:
+      class="comparison cols-2"  → two options
+      class="comparison cols-3"  → three options
+
+    For each option, copy one .option block below. Mark the recommended option by adding
+    class="recommended" to its .option div.
+
+    Code blocks: use <pre><code class="language-typescript"> (or python, yaml, go, etc.)
+    Diagrams:    use <pre class="mermaid"> with raw mermaid syntax inside
+    Tradeoffs:   use the .tradeoffs/.pros/.cons structure
+
+    The .notes bar at the bottom is for cross-cutting observations, open questions,
+    or anything that applies to all options rather than one specific option.
+
+    EXAMPLE — two-option comparison with code and a diagram:
+  -->
+
+  <div class="comparison cols-2">
+
+    <!-- ── Option A ── -->
+    <div class="option recommended">
+      <div class="option-header">
+        <div class="option-label">Option A</div>
+        <div class="option-title">
+          Plugin Registry Pattern
+          <span class="recommendation-badge">Recommended</span>
+        </div>
+        <div class="option-desc">Named handlers registered at startup, looked up at runtime.</div>
+      </div>
+      <div class="option-body">
+
+        <div class="section-label">Interface</div>
+        <pre><code class="language-typescript">interface Plugin {
+  name: string;
+  execute(ctx: Context): Promise&lt;Result&gt;;
+}
+
+const registry = new Map&lt;string, Plugin&gt;();
+
+function register(plugin: Plugin) {
+  registry.set(plugin.name, plugin);
+}
+
+function run(name: string, ctx: Context) {
+  const plugin = registry.get(name);
+  if (!plugin) throw new Error(`Unknown plugin: ${name}`);
+  return plugin.execute(ctx);
+}</code></pre>
+
+        <div class="section-label">Architecture</div>
+        <pre class="mermaid">
+flowchart TD
+    App -->|register| Registry[(Plugin Registry)]
+    App -->|run name| Registry
+    Registry -->|lookup + call| PluginA[Plugin A]
+    Registry -->|lookup + call| PluginB[Plugin B]
+        </pre>
+
+        <div class="section-label">Tradeoffs</div>
+        <div class="tradeoffs">
+          <div class="tradeoff-col pros">
+            <h4>Pros</h4>
+            <ul>
+              <li>Simple — one Map, no loader</li>
+              <li>Testable in isolation</li>
+              <li>No new infrastructure</li>
+            </ul>
+          </div>
+          <div class="tradeoff-col cons">
+            <h4>Cons</h4>
+            <ul>
+              <li>Plugins must be known at startup</li>
+              <li>No dynamic loading</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Option B ── -->
+    <div class="option">
+      <div class="option-header">
+        <div class="option-label">Option B</div>
+        <div class="option-title">Dynamic Loader + Version Resolver</div>
+        <div class="option-desc">Plugins discovered from disk at runtime with semver resolution.</div>
+      </div>
+      <div class="option-body">
+
+        <div class="section-label">Interface</div>
+        <pre><code class="language-typescript">interface PluginManifest {
+  name: string;
+  version: string;
+  entrypoint: string;
+}
+
+class PluginLoader {
+  async load(name: string, range: string): Promise&lt;Plugin&gt; {
+    const manifest = await this.resolve(name, range);
+    const mod = await import(manifest.entrypoint);
+    return mod.default;
+  }
+
+  private async resolve(name: string, range: string) {
+    // scan plugin dirs, parse manifests, semver match
+  }
+}</code></pre>
+
+        <div class="section-label">Architecture</div>
+        <pre class="mermaid">
+flowchart TD
+    App -->|load name@range| Loader[Plugin Loader]
+    Loader -->|scan| Disk[(Plugin Directories)]
+    Loader -->|parse| Manifest[Manifests]
+    Loader -->|semver match| Resolver[Version Resolver]
+    Resolver -->|import| Plugin[Plugin Module]
+        </pre>
+
+        <div class="section-label">Tradeoffs</div>
+        <div class="tradeoffs">
+          <div class="tradeoff-col pros">
+            <h4>Pros</h4>
+            <ul>
+              <li>Plugins installable without restart</li>
+              <li>Version pinning per consumer</li>
+            </ul>
+          </div>
+          <div class="tradeoff-col cons">
+            <h4>Cons</h4>
+            <ul>
+              <li>3 layers for a problem we don't have yet</li>
+              <li>Disk I/O on every load</li>
+              <li>Semver resolver is non-trivial</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /.comparison -->
+
+  <div class="notes">
+    <h3>Notes</h3>
+    <ul>
+      <li>Option A is sufficient unless plugins need to be added without a restart — that requirement hasn't been stated.</li>
+      <li>Option B's complexity is justified only when plugins come from untrusted third parties with incompatible versions.</li>
+      <li>Open question: do plugins need to be composable (chained), or are they always invoked independently?</li>
+    </ul>
+  </div>
+
+</body>
+</html>
